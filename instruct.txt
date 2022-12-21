@@ -117,7 +117,7 @@
 	!!!		Для настройки SSH через прокси ставим corkscrew
 	# sudo apt install corkscrew
 
-	ssh-keygen -t ed25519 -C "andrewkoff@gmail.com"
+	ssh-keygen -t ed25519 -C "email_address"
 
 	!!!	Запоминаем passphrase !!!
 
