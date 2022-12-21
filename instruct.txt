@@ -1,0 +1,221 @@
+Сервер Ubuntu 22.04 LTS
+
+-2. Общее описание.
+
+	*	Проект клонируем из github в папку /home/alex/work, там же храним специфичные для деплоя и прода файлы
+	*	Запускаем проект из папки /home/alex/work/fp
+
+-1. Если работаем за прокси, прописываем 
+
+	export http_proxy=http://username:password@10.11.100.248:3128
+	export https_proxy=http://username:password@10.11.100.248:3128
+
+0. Ставим nginx (если нет), сносим apache2 (если есть), настраиваем ufw
+
+	https://www.digitalocean.com/community/tutorials/how-to-install-nginx-on-ubuntu-22-04
+
+1. Ставим свежий Python 3.10.x
+
+	sudo apt update && sudo apt upgrade -y
+
+	sudo apt install software-properties-common -y
+
+	sudo add-apt-repository ppa:deadsnakes/ppa
+
+2. Ставим pip, если нет
+
+	sudo apt install python3-pip
+
+3. Ставим pipenv
+
+	pip install pipenv
+
+	WARNING: The scripts pipenv and pipenv-resolver are installed in '/home/alex/.local/bin' which is not on PATH.
+	Consider adding this directory to PATH or, if you prefer to suppress this warning, use --no-warn-script-location.
+
+	Добавляем путь в файл /etc/environment
+	Потом делаем: source /etc/environment
+	Проверка: pipenv --version
+
+4. Создаем virtual environment  с помощью pipenv и устанавливаем Django и пакет django-bootstrap5 (интеграция django с фреймворком bootstrap 5), устанавливаем gunicorn
+
+	pipenv shell --three
+	pipenv install django
+	pipenv install django-bootstrap5
+	pipenv install gunicorn
+
+	Настроим gunicorn - в папке с проектом (там, где manage.py) создаем папки и файл config/gunicorn/dev.py
+	
+	mkdir -pv config/gunicorn/
+	
+	содержимое файла config/gunicorn/dev.py:
+	
+		"""Gunicorn *development* config file"""
+
+		# Django WSGI application path in pattern MODULE_NAME:VARIABLE_NAME
+		wsgi_app = "fkight_planner.wsgi:application"
+		# The granularity of Error log outputs
+		loglevel = "debug"
+		# The number of worker processes for handling requests
+		workers = 3
+		# The socket to bind
+		bind = "0.0.0.0:8000"
+		# Restart workers when code changes (development only!)
+		reload = True
+		# Write access and error info to /var/log
+		accesslog = errorlog = "/var/log/gunicorn/dev.log"
+		# Redirect stdout/stderr to log file
+		capture_output = True
+		# PID file so you can easily fetch process ID
+		pidfile = "/var/run/gunicorn/dev.pid"
+		# Daemonize the Gunicorn process (detach & enter background)
+		daemon = True
+
+	Запускаем команды для создания папок и даем права на них:
+	
+	sudo mkdir -pv /var/{log,run}/gunicorn/
+	sudo chown -cR alex:alex /var/{log,run}/gunicorn/
+	
+5. Этот пункт не для прода! Создаем django проект flight_planner
+
+	jango-admin startproject flight_planner
+
+6. Этот пункт не для прода! Добавляем модуль django-bootstrap5 в раздел `INSTALLED_APPS` в файле `settings.py`, делаем настройки безопасности там же:
+
+   INSTALLED_APPS = (
+       # ...
+       "django_bootstrap5",
+       # ...
+   )
+
+	Закомментируем строку
+	
+	SECRET_KEY = "django-insecure-o6w@a46mx..."
+	
+	Добавим в файл
+	
+	import os
+
+	# ...
+
+	try:
+		SECRET_KEY = os.environ["SECRET_KEY"]
+	except KeyError as e:
+		raise RuntimeError("Could not find a SECRET_KEY in environment") from e
+	
+	В терминале выполнить (для тестирования, на проде не нужно. Наверно...)
+	
+	echo "export SECRET_KEY='$(openssl rand -hex 40)'" > /home/alex/work/.DJANGO_SECRET_KEY
+	source /home/alex/work/.DJANGO_SECRET_KEY
+
+7. Этот пункт не для прода! Фиксируем пакеты в Pipfile.lock
+
+	pipenv lock
+   
+8. Настраиваем git для работы по SSH (аутентификация по логину/паролю запрещена!) - https://docs.github.com/en/authentication/connecting-to-github-with-ssh
+
+	!!!		Для настройки SSH через прокси ставим corkscrew
+	# sudo apt install corkscrew
+
+	ssh-keygen -t ed25519 -C "andrewkoff@gmail.com"
+
+	!!!	Запоминаем passphrase !!!
+
+	eval "$(ssh-agent -s)"
+	ssh-add ~/.ssh/id_ed25519
+
+	Добавляем SSH key на гитхаб
+
+9. Выбираем папку для хранения проектов (например, /home/alex/work), идем в эту папку и клонируем репозиторий. При необходимости даем права на запись в эту папку!
+
+	cd /home/alex/work
+	git clone -b main git@github.com:andrewkoff/fp.git
+
+10. Устанавливаем зафкисированное на шаге 7 окружение. Копируем в /home/alex/work файлы pipenv и pipenv.lock, запускаем
+
+	pipenv sync
+
+11. Для проверки запускаем gunicron из папки /home/alex/work (можно создать там файл run.sh для быстрого запуска)
+
+	source ~/.DJANGO_SECRET_KEY
+	cd fp
+	pipenv run gunicorn -c config/gunicorn/dev.py
+
+	!!!	Проверить запуск, читаем лог-файл
+
+	tail -f /var/log/gunicorn/dev.log
+
+12. Настраиваем nginx, создаем файл конфигурации /etc/nginx/sites-available/fp.conf
+
+	server_tokens               off;
+	access_log                  /var/log/nginx/fp.access.log;
+	error_log                   /var/log/nginx/fp.error.log;
+
+	# This configuration will be changed to redirect to HTTPS later
+	server {
+	  server_name               .flight-planner;
+	  listen                    80;
+	  location / {
+		include proxy_params;
+		proxy_pass              http://unix:/home/alex/work/fp/fp.sock;
+	#    proxy_set_header        Host $host;
+	  }
+
+	  location /static {
+		autoindex on;
+		alias /home/alex/www/static;
+	  }
+	}
+
+	Включаем сайт (создаем симлинк на конфиг) и перегружаем nginx
+	
+	cd /etc/nginx/sites-enabled
+	sudo ln -s ../sites-available/fp.conf .
+	sudo systemctl restart nginx
+
+13. Для работы nginx-а со статическими файлами выполнить команду
+
+	pipenv run python manage.py collectstatic
+	
+14. Настраиваем запуск gunicorn как системную службу (https://www.digitalocean.com/community/tutorials/how-to-set-up-django-with-postgres-nginx-and-gunicorn-on-ubuntu-16-04)
+
+	*	Создаем папку /etc/fpapp, внутри создаем файл fpapp.conf, в файле пишем:
+	
+	SECRET_KEY='значение из пункта 6'
+	
+	*	В папке /etc/systemd/system создаем файл fpgunicorn.service, в файл пишем
+	
+	####################
+	[Unit]
+	Description = fpApp
+	After = network.target
+
+	[Service]
+	PermissionsStartOnly = true
+	PIDFile = /run/fpapp/fpapp.pid
+	User = alex
+	Group = www-data
+	WorkingDirectory = /home/alex/work/fp
+	EnvironmentFile=/etc/fpapp/fpapp.conf
+	ExecStartPre = /bin/rm -rf /run/fpapp
+	ExecStartPre = /bin/mkdir /run/fpapp
+	ExecStartPre = /bin/chown -R alex:www-data /run/fpapp
+	ExecStart = /home/alex/work/.venv/bin/gunicorn --workers 3 -b unix:/home/alex/work/fp/fp.sock flight_planner.wsgi:application
+	#ExecReload = /bin/kill -s HUP $MAINPID
+	#ExecStop = /bin/kill -s TERM $MAINPID
+	#ExecStopPost = /bin/rm -rf /run/sampleapp
+	PrivateTmp = true
+
+	[Install]
+	WantedBy = multi-user.target
+	####################
+
+	Сохраняем файл, и пишем команду
+	
+	sudo systemctl enable gunicorn
+	
+	Далее проверяем запуск и исправляем ошибки, если будут
+	
+	sudo systemctl start gunicorn
+	
+15. Проверяем работу
