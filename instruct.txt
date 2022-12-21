@@ -7,8 +7,8 @@
 
 -1. Если работаем за прокси, прописываем 
 
-	export http_proxy=http://username:password@10.11.100.248:3128
-	export https_proxy=http://username:password@10.11.100.248:3128
+	export http_proxy=http://username:password@ipaddress:port
+	export https_proxy=http://username:password@ipaddress:port
 
 0. Ставим nginx (если нет), сносим apache2 (если есть), настраиваем ufw
 
